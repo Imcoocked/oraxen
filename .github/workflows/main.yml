@@ -1,15 +1,15 @@
-name: Build Oraxen v1.216.0
+name: Build Oraxen v1.214.0
 on:
   workflow_dispatch:
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Oraxen v1.216.0
+      - name: Checkout Oraxen v1.214.0
         uses: actions/checkout@v4
         with:
           repository: oraxen/oraxen
-          ref: v1.216.0
+          ref: v1.214.0
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -29,5 +29,5 @@ jobs:
       - name: Upload plugin jar
         uses: actions/upload-artifact@v4
         with:
-          name: oraxen-v1.216.0
+          name: oraxen-v1.214.0
           path: build/libs/*.jar
