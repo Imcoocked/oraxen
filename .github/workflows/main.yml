@@ -19,12 +19,18 @@ jobs:
 
       - name: Install WorldEdit into local Maven cache
         run: |
-          wget -q "https://dev.bukkit.org/projects/worldedit/files/latest" -O worldedit.jar || \
           wget -q "https://github.com/EngineHub/WorldEdit/releases/download/7.3.9/worldedit-bukkit-7.3.9.jar" -O worldedit.jar
           mvn install:install-file \
             -Dfile=worldedit.jar \
             -DgroupId=com.sk89q.worldedit \
             -DartifactId=worldedit-bukkit \
+            -Dversion=7.4.0-SNAPSHOT \
+            -Dpackaging=jar \
+            -DgeneratePom=true
+          mvn install:install-file \
+            -Dfile=worldedit.jar \
+            -DgroupId=com.sk89q.worldedit \
+            -DartifactId=worldedit-core \
             -Dversion=7.4.0-SNAPSHOT \
             -Dpackaging=jar \
             -DgeneratePom=true
