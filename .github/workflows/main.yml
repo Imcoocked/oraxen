@@ -10,13 +10,22 @@ jobs:
         with:
           repository: oraxen/oraxen
           ref: v1.216.0
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
-      - name: Build with Gradle
-        run: ./gradlew shadowJar --no-daemon
+
+      - name: Build with Gradle (with retries)
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "Attempt $i..."
+            ./gradlew shadowJar --no-daemon && break
+            echo "Build failed, waiting before retry..."
+            sleep 60
+          done
+
       - name: Upload plugin jar
         uses: actions/upload-artifact@v4
         with:
