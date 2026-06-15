@@ -20,7 +20,7 @@ jobs:
       - name: Install WorldEdit into local Maven cache
         run: |
           curl -L -o worldedit.jar \
-            "https://github.com/EngineHub/WorldEdit/releases/download/7.3.9/worldedit-bukkit-7.3.9.jar"
+            "https://cdn.modrinth.com/data/1u6JkXh5/versions/Bu1zaaoc/worldedit-bukkit-7.3.9.jar?mr_download_reason=standalone"
           mvn install:install-file \
             -Dfile=worldedit.jar \
             -DgroupId=com.sk89q.worldedit \
