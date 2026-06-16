@@ -36,6 +36,13 @@ jobs:
             -Dpackaging=jar \
             -DgeneratePom=true
 
+      - name: Patch build.gradle.kts to remove EngineHub repo
+        run: |
+          sed -i 's|maven("https://maven.enginehub.org/repo/")||g' build.gradle.kts
+          sed -i 's|maven { url = uri("https://maven.enginehub.org/repo/") }||g' build.gradle.kts
+          echo "--- Checking enginehub references ---"
+          grep -n "enginehub\|worldedit" build.gradle.kts | head -20
+
       - name: Build with Gradle (with retries)
         env:
           JITPACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
