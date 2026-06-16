@@ -38,10 +38,13 @@ jobs:
 
       - name: Patch build.gradle.kts to remove EngineHub repo
         run: |
-          sed -i 's|maven("https://maven.enginehub.org/repo/")||g' build.gradle.kts
-          sed -i 's|maven { url = uri("https://maven.enginehub.org/repo/") }||g' build.gradle.kts
-          echo "--- Checking enginehub references ---"
-          grep -n "enginehub\|worldedit" build.gradle.kts | head -20
+          # Show what the enginehub line looks like before patching
+          grep -n "enginehub\|maven" build.gradle.kts | head -30
+          # Remove the entire line containing enginehub
+          sed -i '/enginehub/d' build.gradle.kts
+          # Verify
+          echo "--- After patch ---"
+          sed -n '75,90p' build.gradle.kts
 
       - name: Build with Gradle (with retries)
         env:
