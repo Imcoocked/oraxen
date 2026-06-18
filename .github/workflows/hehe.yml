@@ -35,12 +35,12 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      # ── 4. Apply thread-safety patch (NoteBlock deadlock fix) ──────────────
-      # Root cause: PacketEventsBreakerSystem calls BreakerSystem.handleEvent()
-      # on the Netty IO thread. NoteBlockMechanicListener.isTriggered() then
-      # calls CraftBlock.getType() → ServerChunkCache.getChunk().join()
-      # which waits for the server thread — deadlock when the server thread is
-      # simultaneously blocked on a Netty channel write (player login).
+      # ── 4. Apply thread-safety patch (NoteBlock BreakerSystem deadlock fix) ─
+      # Root cause: PacketEventsBreakerSystem calls handleEvent() on the Netty
+      # IO thread. NoteBlockMechanicListener.isTriggered() then calls
+      # CraftBlock.getType() → ServerChunkCache.getChunk().join() which waits
+      # for the server thread — deadlock when the server thread is simultaneously
+      # blocked on a Netty channel write (player login).
       # Fix: dispatch handleEvent() to the main thread via Bukkit scheduler.
       - name: Apply thread-safety patch (NoteBlock BreakerSystem deadlock fix)
         run: |
@@ -56,7 +56,6 @@ jobs:
                           return os.path.join(root, f)
               return None
 
-          # ── Locate PacketEventsBreakerSystem.java ──────────────────────────
           path = find_file('PacketEventsBreakerSystem.java')
           if not path:
               print("ERROR: PacketEventsBreakerSystem.java not found")
@@ -66,12 +65,17 @@ jobs:
           with open(path) as fh:
               src = fh.read()
 
-          # ── Guard: already patched? ────────────────────────────────────────
+          # Print the file so we can see its structure in the Actions log
+          print("── File content ────────────────────────────────────────────")
+          for i, line in enumerate(src.splitlines(), 1):
+              print(f"  {i:4d}: {line}")
+          print("────────────────────────────────────────────────────────────")
+
           if 'isPrimaryThread' in src:
               print("✅ Patch already applied — skipping.")
               sys.exit(0)
 
-          # ── Add Bukkit import if missing ───────────────────────────────────
+          # Add Bukkit import if missing
           if 'import org.bukkit.Bukkit;' not in src:
               src = re.sub(
                   r'^(import )',
@@ -79,10 +83,10 @@ jobs:
                   src, count=1, flags=re.MULTILINE
               )
 
-          # ── Wrap every handleEvent() call in a main-thread dispatch ─────────
-          # Matches lines like:
-          #   breakerSystem.handleEvent(a, b);
-          #   BreakerSystem.handleEvent(a, b);
+          # Match handleEvent(...); calls — use [^{}]+ to avoid matching
+          # across lambda braces, and require the line to end with );
+          # Uses block-lambda syntax () -> { call; } to avoid Java parser
+          # ambiguity when the call itself contains lambda arguments like () -> {}
           pattern = re.compile(
               r'([ \t]+)((?:\w+\.)?handleEvent\([^;]+;)',
               re.MULTILINE
@@ -91,13 +95,15 @@ jobs:
           def make_dispatch(m):
               indent = m.group(1)
               call   = m.group(2)
+              # Use block lambda { } to avoid parser issues when call itself
+              # contains lambdas as arguments (e.g. () -> {})
               return (
                   f'{indent}if (Bukkit.isPrimaryThread()) {{\n'
                   f'{indent}    {call}\n'
                   f'{indent}}} else {{\n'
                   f'{indent}    Bukkit.getScheduler().runTask(\n'
                   f'{indent}        io.th0rgal.oraxen.OraxenPlugin.get(),\n'
-                  f'{indent}        () -> {call}\n'
+                  f'{indent}        () -> {{ {call} }}\n'
                   f'{indent}    );\n'
                   f'{indent}}}'
               )
@@ -105,23 +111,17 @@ jobs:
           new_src, count = pattern.subn(make_dispatch, src)
 
           if count == 0:
-              print("ERROR: handleEvent() pattern not found — check the file manually:")
-              # Print lines around likely area for debugging
-              for i, line in enumerate(src.splitlines()):
-                  if 'handleEvent' in line or 'onPacketReceive' in line:
-                      print(f"  line {i+1}: {line}")
+              print("ERROR: handleEvent() pattern not found")
               sys.exit(1)
 
           with open(path, 'w') as fh:
               fh.write(new_src)
 
-          print(f"✅ Patched {count} handleEvent() call(s) in {path}")
-
-          # ── Verify the patch looks correct ─────────────────────────────────
-          print("\n── Patched method (context) ────────────────────────────────")
-          for i, line in enumerate(new_src.splitlines()):
-              if 'isPrimaryThread' in line or 'handleEvent' in line or 'runTask' in line:
-                  print(f"  {i+1:4d}: {line}")
+          print(f"\n✅ Patched {count} handleEvent() call(s) in {path}")
+          print("\n── Result (relevant lines) ─────────────────────────────────")
+          for i, line in enumerate(new_src.splitlines(), 1):
+              if any(k in line for k in ('isPrimaryThread', 'handleEvent', 'runTask', 'Bukkit')):
+                  print(f"  {i:4d}: {line}")
           PYEOF
 
       # ── 5. Sanity-check: ProtocolLib must NOT be on the classpath ──────────
