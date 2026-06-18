@@ -15,18 +15,18 @@ jobs:
     steps:
       # ── 1. Checkout ────────────────────────────────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       # ── 2. Java (Paper 1.21.1 + Oraxen require Java 21) ───────────────────
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
 
       # ── 3. Gradle cache ────────────────────────────────────────────────────
       - name: Cache Gradle packages
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
@@ -35,96 +35,7 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      # ── 4. Apply thread-safety patch (NoteBlock BreakerSystem deadlock fix) ─
-      # Root cause: PacketEventsBreakerSystem calls handleEvent() on the Netty
-      # IO thread. NoteBlockMechanicListener.isTriggered() then calls
-      # CraftBlock.getType() → ServerChunkCache.getChunk().join() which waits
-      # for the server thread — deadlock when the server thread is simultaneously
-      # blocked on a Netty channel write (player login).
-      # Fix: dispatch handleEvent() to the main thread via Bukkit scheduler.
-      - name: Apply thread-safety patch (NoteBlock BreakerSystem deadlock fix)
-        run: |
-          python3 - << 'PYEOF'
-          import os, re, sys
-
-          def find_file(name):
-              for root, _, files in os.walk('.'):
-                  if '.git' in root:
-                      continue
-                  for f in files:
-                      if f == name:
-                          return os.path.join(root, f)
-              return None
-
-          path = find_file('PacketEventsBreakerSystem.java')
-          if not path:
-              print("ERROR: PacketEventsBreakerSystem.java not found")
-              sys.exit(1)
-          print(f"Found: {path}")
-
-          with open(path) as fh:
-              src = fh.read()
-
-          # Print the file so we can see its structure in the Actions log
-          print("── File content ────────────────────────────────────────────")
-          for i, line in enumerate(src.splitlines(), 1):
-              print(f"  {i:4d}: {line}")
-          print("────────────────────────────────────────────────────────────")
-
-          if 'isPrimaryThread' in src:
-              print("✅ Patch already applied — skipping.")
-              sys.exit(0)
-
-          # Add Bukkit import if missing
-          if 'import org.bukkit.Bukkit;' not in src:
-              src = re.sub(
-                  r'^(import )',
-                  'import org.bukkit.Bukkit;\n\\1',
-                  src, count=1, flags=re.MULTILINE
-              )
-
-          # Match handleEvent(...); calls — use [^{}]+ to avoid matching
-          # across lambda braces, and require the line to end with );
-          # Uses block-lambda syntax () -> { call; } to avoid Java parser
-          # ambiguity when the call itself contains lambda arguments like () -> {}
-          pattern = re.compile(
-              r'([ \t]+)((?:\w+\.)?handleEvent\([^;]+;)',
-              re.MULTILINE
-          )
-
-          def make_dispatch(m):
-              indent = m.group(1)
-              call   = m.group(2)
-              # Use block lambda { } to avoid parser issues when call itself
-              # contains lambdas as arguments (e.g. () -> {})
-              return (
-                  f'{indent}if (Bukkit.isPrimaryThread()) {{\n'
-                  f'{indent}    {call}\n'
-                  f'{indent}}} else {{\n'
-                  f'{indent}    Bukkit.getScheduler().runTask(\n'
-                  f'{indent}        io.th0rgal.oraxen.OraxenPlugin.get(),\n'
-                  f'{indent}        () -> {{ {call} }}\n'
-                  f'{indent}    );\n'
-                  f'{indent}}}'
-              )
-
-          new_src, count = pattern.subn(make_dispatch, src)
-
-          if count == 0:
-              print("ERROR: handleEvent() pattern not found")
-              sys.exit(1)
-
-          with open(path, 'w') as fh:
-              fh.write(new_src)
-
-          print(f"\n✅ Patched {count} handleEvent() call(s) in {path}")
-          print("\n── Result (relevant lines) ─────────────────────────────────")
-          for i, line in enumerate(new_src.splitlines(), 1):
-              if any(k in line for k in ('isPrimaryThread', 'handleEvent', 'runTask', 'Bukkit')):
-                  print(f"  {i:4d}: {line}")
-          PYEOF
-
-      # ── 5. Sanity-check: ProtocolLib must NOT be on the classpath ──────────
+      # ── 4. Sanity-check: ProtocolLib must NOT be on the classpath ──────────
       - name: Verify ProtocolLib is absent from dependencies
         run: |
           echo "=== Resolved runtime classpath ==="
@@ -138,30 +49,20 @@ jobs:
             echo "✅ ProtocolLib not present."
           fi
 
-      # ── 6. Build ───────────────────────────────────────────────────────────
+      # ── 5. Build ───────────────────────────────────────────────────────────
       - name: Build plugin JAR
         run: ./gradlew shadowJar --no-daemon --stacktrace
 
-      # ── 7. Verify patch survived compilation ───────────────────────────────
-      - name: Verify thread-safety patch is present in compiled JAR
-        run: |
-          JAR=$(find build/libs -name "*.jar" ! -name "*-sources.jar" | head -1)
-          if unzip -p "$JAR" '*PacketEventsBreakerSystem*' 2>/dev/null | strings | grep -q "isPrimaryThread"; then
-            echo "✅ Thread-safety patch confirmed in compiled JAR."
-          else
-            echo "::warning::Could not confirm patch in JAR — check build output."
-          fi
-
-      # ── 8. Rename artifact ─────────────────────────────────────────────────
+      # ── 6. Rename artifact ─────────────────────────────────────────────────
       - name: Rename JAR
         run: |
           mkdir -p artifacts
           find build/libs -name "*.jar" ! -name "*-sources.jar" \
             -exec cp {} artifacts/oraxen-v1.216.0-polibuild.jar \;
 
-      # ── 9. Upload artifact ─────────────────────────────────────────────────
+      # ── 7. Upload artifact ─────────────────────────────────────────────────
       - name: Upload build artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: oraxen-v1.216.0-polibuild
           path: artifacts/oraxen-v1.216.0-polibuild.jar
@@ -176,17 +77,18 @@ jobs:
 
     steps:
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
 
       - name: Download built JAR
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v4
         with:
           name: oraxen-v1.216.0-polibuild
           path: server/plugins
 
+      # Download the latest Paper 1.21.1 build automatically
       - name: Download Paper 1.21.1
         run: |
           BUILD=$(curl -s https://api.papermc.io/v2/projects/paper/versions/1.21.1/builds \
@@ -196,6 +98,7 @@ jobs:
             "https://api.papermc.io/v2/projects/paper/versions/1.21.1/builds/${BUILD}/downloads/${JAR}"
           echo "Downloaded Paper 1.21.1 build ${BUILD}"
 
+      # Boot the server for up to 60s, check PacketEvents loads and ProtocolLib stays out
       - name: Start Paper and verify PacketEvents loads
         run: |
           cd server
@@ -215,7 +118,7 @@ jobs:
           fi
 
           if grep -qi "ProtocolLib" server.log; then
-            echo "::error::ProtocolLib appeared in server output!"
+            echo "::error::ProtocolLib appeared in server output — something is still depending on it!"
             exit 1
           else
             echo "✅ ProtocolLib not mentioned — good."
