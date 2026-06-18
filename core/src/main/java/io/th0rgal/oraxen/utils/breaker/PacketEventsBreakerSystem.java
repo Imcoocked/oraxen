@@ -12,6 +12,7 @@ import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerBl
 import io.th0rgal.oraxen.OraxenPlugin;
 import io.th0rgal.oraxen.utils.SchedulerUtil;
 import io.th0rgal.oraxen.utils.VersionUtil;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -34,6 +35,12 @@ public class PacketEventsBreakerSystem extends BreakerSystem {
                 OraxenPlugin.get().getLogger().warning("[PacketEvents] Failed to decode BlockFace: " + wrapper.getBlockFace().name());
                 blockFace = BlockFace.UP;
             }
+            // blockFace is assigned once in the try branch and once in the catch branch.
+            // Only one of those ever actually executes, but javac's effectively-final check
+            // doesn't reason about mutual exclusivity here, so blockFace itself can never be
+            // captured by a lambda. Copy it into a true final immediately (the Folia branch
+            // below already needed this same workaround via finalBlockFace).
+            final BlockFace finalBlockFace = blockFace;
 
             final boolean startedDigging = wrapper.getAction() == DiggingAction.START_DIGGING;
             final boolean finishedDigging = wrapper.getAction() == DiggingAction.FINISHED_DIGGING;
@@ -41,7 +48,6 @@ public class PacketEventsBreakerSystem extends BreakerSystem {
             // PacketEvents invokes this listener from Netty. On Folia, reading block state from
             // that thread can crash CraftBlock#getType because no region world data is bound.
             if (VersionUtil.isFoliaServer()) {
-                final BlockFace finalBlockFace = blockFace;
                 SchedulerUtil.runForEntity(player, () -> {
                     final World world = player.getWorld();
                     final Location location = new Location(world, pos.getX(), pos.getY(), pos.getZ());
@@ -54,13 +60,37 @@ public class PacketEventsBreakerSystem extends BreakerSystem {
                 return;
             }
 
-            final World world = player.getWorld();
-            if (!world.isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) return;
-            final Block block = world.getBlockAt(pos.getX(), pos.getY(), pos.getZ());
-            final Location location = block.getLocation();
+            // Non-Folia (Paper/Spigot): handleEvent() must not run on the Netty thread.
+            // Deep inside it, mechanic checks (e.g. NoteBlockMechanicListener#isTriggered)
+            // call CraftBlock#getType(), which can join() on a chunk future. If that happens
+            // on the Netty thread at the exact moment the main thread is blocked on a
+            // synchronous Netty channel write (this happens during player login), both
+            // threads deadlock waiting on each other.
+            //
+            // IMPORTANT CAVEAT: dispatching to the main thread means event.setCancelled(true)
+            // below runs *after* this packet has already been forwarded by PacketEvents,
+            // since cancellation is only honored synchronously, during the same call that
+            // received the packet. In practice, once this runs on a delay, digging can no
+            // longer be reliably blocked through this code path. If Oraxen relies on this
+            // cancel to stop players breaking protected/custom blocks, verify that explicitly
+            // (try breaking a high-hardness custom block right after deploying this) before
+            // trusting it in production. A fix that avoids deferring the cancel is possible,
+            // but it means looking at what BreakerSystem#handleEvent and
+            // NoteBlockMechanicListener#isTriggered actually do with the block.
+            final Runnable dig = () -> {
+                final World world = player.getWorld();
+                if (!world.isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) return;
+                final Block block = world.getBlockAt(pos.getX(), pos.getY(), pos.getZ());
+                final Location location = block.getLocation();
+                handleEvent(player, block, location, finalBlockFace, world, () -> event.setCancelled(true),
+                        startedDigging, finishedDigging);
+            };
 
-            handleEvent(player, block, location, blockFace, world, () -> event.setCancelled(true),
-                    startedDigging, finishedDigging);
+            if (Bukkit.isPrimaryThread()) {
+                dig.run();
+            } else {
+                Bukkit.getScheduler().runTask(OraxenPlugin.get(), dig);
+            }
         }
     };
 
