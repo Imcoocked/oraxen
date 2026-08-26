@@ -58,15 +58,21 @@ public class ProtocolLibBreakerSystem extends BreakerSystem {
                 return;
             }
 
-            final World world = player.getWorld();
-            if (!world.isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) return;
-            final Block block = world.getBlockAt(pos.getX(), pos.getY(), pos.getZ());
-            final Location location = block.getLocation();
-
-            // Protocol action 2 is STOP_DESTROY_BLOCK, meaning the block was fully broken.
-            // ABORT_DESTROY_BLOCK is action 1 and means the player released mid-dig.
-            handleEvent(player, block, location, blockFace, world, () -> event.setCancelled(true),
-                    startedDigging, finishedDigging);
+            // FIX(hybrid servers such as Youer): packet callbacks run on the Netty event loop,
+            // and the isChunkLoaded guard is not sufficient there — CraftBlock.getType() can
+            // still perform a blocking chunk load and deadlock against the main thread.
+            // Defer all Bukkit block access to the main thread, mirroring the Folia path.
+            // Tradeoff: the dig packet can no longer be cancelled synchronously, so blocks
+            // with custom hardness break at vanilla speed (the same tradeoff upstream
+            // already ships on Folia).
+            SchedulerUtil.runForEntity(player, () -> {
+                if (!player.isOnline()) return;
+                final World world = player.getWorld();
+                if (!world.isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) return;
+                final Block block = world.getBlockAt(pos.getX(), pos.getY(), pos.getZ());
+                final Location location = block.getLocation();
+                handleEvent(player, block, location, blockFace, world, () -> {}, startedDigging, finishedDigging);
+            }, null);
         }
     };
 
